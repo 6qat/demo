@@ -1,0 +1,43 @@
+{
+  "name": "Ext.ux.WebSocket",
+  "version": "0.0.4",
+  "homepage": "https://github.com/wilk/ExtJS-WebSocket",
+  "authors": [
+    "Vincenzo (Wilk) Ferrari <wilk3ert@gmail.com>"
+  ],
+  "description": "Ext.ux.WebSocket is an extension to manage HTML5 WebSocket with ExtJS and SenchaTouch",
+  "main": [
+    "WebSocket.js",
+    "WebSocketManager.js"
+  ],
+  "keywords": [
+    "extjs",
+    "senchatouch",
+    "sencha",
+    "websocket",
+    "html5"
+  ],
+  "license": "MIT",
+  "ignore": [
+    "**/.*",
+    "node_modules",
+    "bower_components",
+    "test",
+    "tests",
+    "demo",
+    "ux",
+    "package.json",
+    "bower.json",
+    "Gruntfile.js",
+    "*.min.js"
+  ],
+  "_release": "0.0.4",
+  "_resolution": {
+    "type": "version",
+    "tag": "0.0.4",
+    "commit": "e32844c94e13d27b9d4ef2e0c7b38ddd82857d8b"
+  },
+  "_source": "git://github.com/wilk/ExtJS-WebSocket.git",
+  "_target": "~0.0.1",
+  "_originalSource": "ext.ux.websocket"
+}
