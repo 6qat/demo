@@ -24,45 +24,75 @@ import spray.can.websocket
 import spray.can.websocket.frame.{BinaryFrame, TextFrame}
 import spray.can.websocket.FrameCommandFailed
 import spray.json._
-import DefaultJsonProtocol._
 import spray.routing.HttpServiceActor
+import scala.io.Source
 
-// !!! IMPORTANT, else `convertTo` and `toJson` won't work correctly
-
-case class Data(page: Int, limit: Int, start: Int)
-case class ReadEvent(data: Data)
-case class User(id: Int, name: String, age: Int)
+case class Sort(property: String, direction: String)
+case class Data(page: Int, limit: Int, start: Int, sort: Option[Sort])
+case class User(name: String, age: Int, id: Option[String])
 
 trait Request
+case class WsCreate(data: List[User]) extends Request
 case class WsRead(data: Data) extends Request
+case class WsUpdate(data: List[User]) extends Request
+case class WsDelete(data: List[User]) extends Request
+
+// !!! IMPORTANT, else `convertTo` and `toJson` won't work correctly
+import DefaultJsonProtocol._
 
 
 //{"event":"read","data":{"page":1,"limit":25,"start":0}}
-object WsJsonProtocol extends DefaultJsonProtocol {
+object RequestJsonProtocol extends DefaultJsonProtocol {
 
-  implicit object WsReadJsonFormat extends RootJsonFormat[WsRead] {
-    def write(p: WsRead) = JsObject(
-      "event" -> JsString("read"),
-      "data" -> dataFormat.write(p.data)
-    )
+  implicit object RequestJsonFormat extends RootJsonFormat[Request] {
+    // this isn't very DRY!!
+    override def write(obj: Request): JsValue = obj match {
+      case p@(_: WsCreate) =>
+        JsObject(
+          "event" -> JsString("create"),
+          "data" -> p.data.toJson
+        )
+      case p@(_: WsRead) =>
+        JsObject(
+          "event" -> JsString("read"),
+          "data" -> p.data.toJson
+        )
+      case p@(_: WsUpdate) =>
+        JsObject(
+          "event" -> JsString("update"),
+          "data" -> p.data.toJson
+        )
+      case p@(_: WsDelete) =>
+        JsObject(
+          "event" -> JsString("delete"),
+          "data" -> p.data.toJson
+        )
+    }
 
     def read(value: JsValue) = value match {
       case JsObject(fields) =>
         (fields("event"), fields("data")) match {
+          case (JsString("create"), element) =>
+            WsCreate(element.convertTo[List[User]])
           case (JsString("read"), element) =>
-            WsRead(dataFormat.read(element))
-          case _ => throw new DeserializationException("Unhandled Pageable")
+            WsRead(element.convertTo[Data])
+          case (JsString("update"), element) =>
+            WsUpdate(element.convertTo[List[User]])
+          case (JsString("delete"), element) =>
+            WsDelete(element.convertTo[List[User]])
+          case _ => throw new DeserializationException("Unhandled Request")
         }
-      case _ => throw new DeserializationException("Pageable Expected")
+      case _ => throw new DeserializationException("Request Expected")
     }
   }
 
-  implicit val dataFormat = jsonFormat3(Data)
+  implicit val sortFormat : JsonFormat[Sort] = jsonFormat2(Sort)
+  implicit val dataFormat : JsonFormat[Data] = jsonFormat4(Data)
+  implicit val userFormat : JsonFormat[User] = jsonFormat3(User)
 }
 
 object SimpleServer extends App with MySslConfiguration {
-
-  final case class Push(msg: String)
+  var users = Map[String, User]()
 
   object WebSocketServer {
     def props() = Props(classOf[WebSocketServer])
@@ -83,32 +113,33 @@ object SimpleServer extends App with MySslConfiguration {
   }
 
   class WebSocketWorker(val serverConnection: ActorRef) extends HttpServiceActor with websocket.WebSocketServerConnection {
-
-    import WsJsonProtocol._
+//    import RequestJsonProtocol._
+//    import DefaultJsonProtocol._
 
     override def receive = handshaking orElse businessLogicNoUpgrade orElse closeLogic
 
     def businessLogic: Receive = {
-      // just bounce frames back for Autobahn testsuite
-      case x@(_: BinaryFrame) =>
-        sender() ! x
-
       case x@(_: TextFrame) =>
-        val obj = x.payload.utf8String.parseJson.convertTo[WsRead]
+        import RequestJsonProtocol._
+        val obj = x.payload.utf8String.parseJson.convertTo[Request]
         self ! obj
 
-      case Push(msg) =>
-        send(TextFrame(msg))
+      case x: WsCreate =>
+        log.debug("Got WsCreate: {}", x)
+      case x: WsRead =>
+        log.debug("Got WsRead: {}", x)
+        import RequestJsonProtocol._
+        send(TextFrame(users.values.toList.toJson.compactPrint))
+      case x: WsUpdate =>
+        log.debug("Got WsUpdate: {}", x)
+      case x: WsDelete =>
+        log.debug("Got WsDelete: {}", x)
 
+      case UHttp.Upgraded =>
+        self ! WsRead(Data(1, 25, 0, None))
       case x: FrameCommandFailed =>
         log.error("frame command failed", x)
 
-      case x: WsRead =>
-        log.debug("Got ReadEvent: {}", x)
-        send(TextFrame("""{ "event": "read", "data": [ { "id": "1", "name": "Brian", "age": "47"} ] }"""))
-
-      case UHttp.Upgraded =>
-        self ! WsRead(Data(1,25,0))
     }
 
     def businessLogicNoUpgrade: Receive = {
@@ -120,6 +151,14 @@ object SimpleServer extends App with MySslConfiguration {
   }
 
   def doMain() {
+    import RequestJsonProtocol.userFormat
+    import DefaultJsonProtocol._
+
+    val res = this.getClass.getClassLoader.getResourceAsStream("Users.json")
+    users = Source.fromInputStream(res).mkString.parseJson.convertTo[List[User]].map(
+      u => (u.id.get, u)
+    ).toMap
+
     implicit val system = ActorSystem()
 
     val server = system.actorOf(WebSocketServer.props(), "websocket")
