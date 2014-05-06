@@ -38,11 +38,15 @@ case class WsUpdate(data: List[User]) extends Request
 case class WsDelete(data: List[User]) extends Request
 
 // !!! IMPORTANT, else `convertTo` and `toJson` won't work correctly
-import DefaultJsonProtocol._
+//import DefaultJsonProtocol._
 
+object UserProtocol extends DefaultJsonProtocol {
+  implicit val userFormat = jsonFormat3(User)
+}
 
 //{"event":"read","data":{"page":1,"limit":25,"start":0}}
 object RequestJsonProtocol extends DefaultJsonProtocol {
+  import UserProtocol._
 
   implicit object RequestJsonFormat extends RootJsonFormat[Request] {
     // this isn't very DRY!!
@@ -88,7 +92,6 @@ object RequestJsonProtocol extends DefaultJsonProtocol {
 
   implicit val sortFormat : JsonFormat[Sort] = jsonFormat2(Sort)
   implicit val dataFormat : JsonFormat[Data] = jsonFormat4(Data)
-  implicit val userFormat : JsonFormat[User] = jsonFormat3(User)
 }
 
 object SimpleServer extends App with MySslConfiguration {
@@ -113,10 +116,12 @@ object SimpleServer extends App with MySslConfiguration {
   }
 
   class WebSocketWorker(val serverConnection: ActorRef) extends HttpServiceActor with websocket.WebSocketServerConnection {
-//    import RequestJsonProtocol._
-//    import DefaultJsonProtocol._
+    import UserProtocol.userFormat
+    import DefaultJsonProtocol._
 
     override def receive = handshaking orElse businessLogicNoUpgrade orElse closeLogic
+
+    val print: String = users.values.toList.toJson.compactPrint
 
     def businessLogic: Receive = {
       case x@(_: TextFrame) =>
@@ -128,8 +133,12 @@ object SimpleServer extends App with MySslConfiguration {
         log.debug("Got WsCreate: {}", x)
       case x: WsRead =>
         log.debug("Got WsRead: {}", x)
-        import RequestJsonProtocol._
-        send(TextFrame(users.values.toList.toJson.compactPrint))
+        try {
+          send(TextFrame(print))
+        }
+        catch {
+          case e: Throwable => println(e)
+        }
       case x: WsUpdate =>
         log.debug("Got WsUpdate: {}", x)
       case x: WsDelete =>
@@ -151,13 +160,14 @@ object SimpleServer extends App with MySslConfiguration {
   }
 
   def doMain() {
-    import RequestJsonProtocol.userFormat
+    import UserProtocol.userFormat
     import DefaultJsonProtocol._
 
     val res = this.getClass.getClassLoader.getResourceAsStream("Users.json")
     users = Source.fromInputStream(res).mkString.parseJson.convertTo[List[User]].map(
       u => (u.id.get, u)
     ).toMap
+    println(users.values.toList.toJson.compactPrint)
 
     implicit val system = ActorSystem()
 

@@ -121,6 +121,9 @@
                         <arg>-make:transitive</arg>
                         <arg>-dependencyfile</arg>
                         <arg>${project.build.directory}/.scala_dependencies</arg>
+                        <!--<arg>-Ystop:erasure</arg>-->
+                        <arg>-Xprint:typer</arg>
+                        <!--<arg>-explaintypes</arg>-->
                     </args>
                     <javacArgs>
                         <javacArg>-Xlint:unchecked</javacArg>
