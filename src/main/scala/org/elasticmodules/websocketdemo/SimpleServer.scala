@@ -26,6 +26,7 @@ import spray.can.websocket.FrameCommandFailed
 import spray.json._
 import spray.routing.HttpServiceActor
 import scala.io.Source
+import scala.util.Random
 
 case class Sort(property: String, direction: String)
 case class Data(page: Int, limit: Int, start: Int, sort: Option[Sort])
@@ -42,6 +43,12 @@ case class WsDelete(data: List[User]) extends Request
 
 object UserProtocol extends DefaultJsonProtocol {
   implicit val userFormat = jsonFormat3(User)
+  implicit val sortFormat : JsonFormat[Sort] = jsonFormat2(Sort)
+  implicit val dataFormat : JsonFormat[Data] = jsonFormat4(Data)
+  implicit val createFormat = jsonFormat1(WsCreate)
+  implicit val readFormat = jsonFormat1(WsRead)
+  implicit val updateFormat = jsonFormat1(WsUpdate)
+  implicit val deleteFormat = jsonFormat1(WsDelete)
 }
 
 //{"event":"read","data":{"page":1,"limit":25,"start":0}}
@@ -68,7 +75,7 @@ object RequestJsonProtocol extends DefaultJsonProtocol {
         )
       case p@(_: WsDelete) =>
         JsObject(
-          "event" -> JsString("delete"),
+          "event" -> JsString("destroy"),
           "data" -> p.data.toJson
         )
     }
@@ -82,16 +89,16 @@ object RequestJsonProtocol extends DefaultJsonProtocol {
             WsRead(element.convertTo[Data])
           case (JsString("update"), element) =>
             WsUpdate(element.convertTo[List[User]])
-          case (JsString("delete"), element) =>
+          case (JsString("destroy"), element) =>
             WsDelete(element.convertTo[List[User]])
-          case _ => throw new DeserializationException("Unhandled Request")
+          case x@_ => throw new DeserializationException("Unhandled Request: " + x)
         }
       case _ => throw new DeserializationException("Request Expected")
     }
   }
 
-  implicit val sortFormat : JsonFormat[Sort] = jsonFormat2(Sort)
-  implicit val dataFormat : JsonFormat[Data] = jsonFormat4(Data)
+//  implicit val sortFormat : JsonFormat[Sort] = jsonFormat2(Sort)
+//  implicit val dataFormat : JsonFormat[Data] = jsonFormat4(Data)
 }
 
 object SimpleServer extends App with MySslConfiguration {
@@ -108,6 +115,8 @@ object SimpleServer extends App with MySslConfiguration {
         val serverConnection = sender()
         val conn = context.actorOf(WebSocketWorker.props(serverConnection))
         serverConnection ! Http.Register(conn)
+      case _ =>
+      // consume and ignore
     }
   }
 
@@ -121,8 +130,6 @@ object SimpleServer extends App with MySslConfiguration {
 
     override def receive = handshaking orElse businessLogicNoUpgrade orElse closeLogic
 
-    val print: String = users.values.toList.toJson.compactPrint
-
     def businessLogic: Receive = {
       case x@(_: TextFrame) =>
         import RequestJsonProtocol._
@@ -130,25 +137,36 @@ object SimpleServer extends App with MySslConfiguration {
         self ! obj
 
       case x: WsCreate =>
+        import UserProtocol.createFormat
         log.debug("Got WsCreate: {}", x)
+        users ++= x.data map {
+          val hash: String = Random.alphanumeric.toString().substring(0, 4)
+          u : User => {
+//            broadcast(x)
+            val user: User = User(u.name, u.age, Some(hash))
+            send(TextFrame(JsObject("event" -> JsString("create"), "data" -> user.toJson).compactPrint))
+            hash -> user
+          }
+        }
       case x: WsRead =>
         log.debug("Got WsRead: {}", x)
-        try {
-          send(TextFrame(print))
-        }
-        catch {
-          case e: Throwable => println(e)
-        }
+        send(TextFrame(JsObject("event" -> JsString("read"), "data" -> users.values.toList.toJson).compactPrint))
       case x: WsUpdate =>
         log.debug("Got WsUpdate: {}", x)
       case x: WsDelete =>
+        import UserProtocol.deleteFormat
         log.debug("Got WsDelete: {}", x)
+        x.data.map { u =>
+          users -= u.id.get
+          send(TextFrame(JsObject("event" -> JsString("destroy"), "data" -> u.toJson).compactPrint))
+        }
 
-      case UHttp.Upgraded =>
+      case websocket.UpgradedToWebSocket =>
         self ! WsRead(Data(1, 25, 0, None))
       case x: FrameCommandFailed =>
-        log.error("frame command failed", x)
-
+        log.error("frame command failed {}", x)
+      case _ =>
+        // consume and ignore
     }
 
     def businessLogicNoUpgrade: Receive = {
@@ -156,6 +174,12 @@ object SimpleServer extends App with MySslConfiguration {
       runRoute {
         getFromResourceDirectory("webapp")
       }
+    }
+  }
+
+  class Listener extends Actor {
+    def receive = {
+      case d: DeadLetter => println(d)
     }
   }
 
@@ -172,6 +196,8 @@ object SimpleServer extends App with MySslConfiguration {
     implicit val system = ActorSystem()
 
     val server = system.actorOf(WebSocketServer.props(), "websocket")
+    val listener = system.actorOf(Props(classOf[Listener]))
+    system.eventStream.subscribe(listener, classOf[DeadLetter])
 
     IO(UHttp) ! Http.Bind(server, "localhost", 8080)
 
