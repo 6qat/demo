@@ -38,9 +38,6 @@ case class WsRead(data: Data) extends Request
 case class WsUpdate(data: List[User]) extends Request
 case class WsDelete(data: List[User]) extends Request
 
-// !!! IMPORTANT, else `convertTo` and `toJson` won't work correctly
-//import DefaultJsonProtocol._
-
 object UserProtocol extends DefaultJsonProtocol {
   implicit val userFormat = jsonFormat3(User)
   implicit val sortFormat : JsonFormat[Sort] = jsonFormat2(Sort)
@@ -51,54 +48,33 @@ object UserProtocol extends DefaultJsonProtocol {
   implicit val deleteFormat = jsonFormat1(WsDelete)
 }
 
-//{"event":"read","data":{"page":1,"limit":25,"start":0}}
 object RequestJsonProtocol extends DefaultJsonProtocol {
   import UserProtocol._
 
   implicit object RequestJsonFormat extends RootJsonFormat[Request] {
-    // this isn't very DRY!!
     override def write(obj: Request): JsValue = obj match {
       case p@(_: WsCreate) =>
-        JsObject(
-          "event" -> JsString("create"),
-          "data" -> p.data.toJson
-        )
+        JsObject("event" -> JsString("create"),"data" -> p.data.toJson)
       case p@(_: WsRead) =>
-        JsObject(
-          "event" -> JsString("read"),
-          "data" -> p.data.toJson
-        )
+        JsObject("event" -> JsString("read"), "data" -> p.data.toJson)
       case p@(_: WsUpdate) =>
-        JsObject(
-          "event" -> JsString("update"),
-          "data" -> p.data.toJson
-        )
+        JsObject("event" -> JsString("update"), "data" -> p.data.toJson)
       case p@(_: WsDelete) =>
-        JsObject(
-          "event" -> JsString("destroy"),
-          "data" -> p.data.toJson
-        )
+        JsObject("event" -> JsString("destroy"), "data" -> p.data.toJson)
     }
 
     def read(value: JsValue) = value match {
       case JsObject(fields) =>
         (fields("event"), fields("data")) match {
-          case (JsString("create"), element) =>
-            WsCreate(element.convertTo[List[User]])
-          case (JsString("read"), element) =>
-            WsRead(element.convertTo[Data])
-          case (JsString("update"), element) =>
-            WsUpdate(element.convertTo[List[User]])
-          case (JsString("destroy"), element) =>
-            WsDelete(element.convertTo[List[User]])
+          case (JsString("create"), element) => WsCreate(element.convertTo[List[User]])
+          case (JsString("read"), element) => WsRead(element.convertTo[Data])
+          case (JsString("update"), element) => WsUpdate(element.convertTo[List[User]])
+          case (JsString("destroy"), element) => WsDelete(element.convertTo[List[User]])
           case x@_ => throw new DeserializationException("Unhandled Request: " + x)
         }
       case _ => throw new DeserializationException("Request Expected")
     }
   }
-
-//  implicit val sortFormat : JsonFormat[Sort] = jsonFormat2(Sort)
-//  implicit val dataFormat : JsonFormat[Data] = jsonFormat4(Data)
 }
 
 object SimpleServer extends App with MySslConfiguration {
@@ -137,28 +113,32 @@ object SimpleServer extends App with MySslConfiguration {
         self ! obj
 
       case x: WsCreate =>
-        import UserProtocol.createFormat
         log.debug("Got WsCreate: {}", x)
-        users ++= x.data map {
-          val hash: String = Random.alphanumeric.toString().substring(0, 4)
-          u : User => {
-//            broadcast(x)
-            val user: User = User(u.name, u.age, Some(hash))
-            send(TextFrame(JsObject("event" -> JsString("create"), "data" -> user.toJson).compactPrint))
-            hash -> user
-          }
+        x.data.map {
+          u : User =>
+            val hash: String = Random.alphanumeric.toString().substring(0, 4)
+            val newUser = User(u.name, u.age, Some(hash))
+            users += (hash -> newUser)
+            // this needs to be a send to all nodes, not just this node
+            send(responseFrame("create", newUser))
         }
       case x: WsRead =>
         log.debug("Got WsRead: {}", x)
-        send(TextFrame(JsObject("event" -> JsString("read"), "data" -> users.values.toList.toJson).compactPrint))
+        send(TextFrame(JsObject("event" -> JsString("read"), "data" -> users.values.toJson).compactPrint))
       case x: WsUpdate =>
         log.debug("Got WsUpdate: {}", x)
+        x.data.map {
+          u : User =>
+            users += (u.id.get -> u)
+            // this needs to be a send to all nodes, not just this node
+            send(responseFrame("update", u))
+        }
       case x: WsDelete =>
-        import UserProtocol.deleteFormat
         log.debug("Got WsDelete: {}", x)
         x.data.map { u =>
           users -= u.id.get
-          send(TextFrame(JsObject("event" -> JsString("destroy"), "data" -> u.toJson).compactPrint))
+          // this needs to be a send to all nodes, not just this node
+          send(responseFrame("destroy", u))
         }
 
       case websocket.UpgradedToWebSocket =>
@@ -177,7 +157,12 @@ object SimpleServer extends App with MySslConfiguration {
     }
   }
 
-  class Listener extends Actor {
+  def responseFrame(eventName: String, newUser: User): TextFrame = {
+    import UserProtocol.userFormat
+    TextFrame(JsObject("event" -> JsString(eventName), "data" -> newUser.toJson).compactPrint)
+  }
+
+  class DeadLetterListener extends Actor {
     def receive = {
       case d: DeadLetter => println(d)
     }
@@ -191,12 +176,11 @@ object SimpleServer extends App with MySslConfiguration {
     users = Source.fromInputStream(res).mkString.parseJson.convertTo[List[User]].map(
       u => (u.id.get, u)
     ).toMap
-    println(users.values.toList.toJson.compactPrint)
 
     implicit val system = ActorSystem()
 
     val server = system.actorOf(WebSocketServer.props(), "websocket")
-    val listener = system.actorOf(Props(classOf[Listener]))
+    val listener = system.actorOf(Props(classOf[DeadLetterListener]))
     system.eventStream.subscribe(listener, classOf[DeadLetter])
 
     IO(UHttp) ! Http.Bind(server, "localhost", 8080)
