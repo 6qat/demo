@@ -161,7 +161,7 @@
             <url>http://repo.spray.io</url>
         </repository>
         <repository>
-            <id>spray-websockets</id>
+            <id>sonatype-snapshots/id>
             <url>https://oss.sonatype.org/content/repositories/snapshots</url>
         </repository>
     </repositories>
