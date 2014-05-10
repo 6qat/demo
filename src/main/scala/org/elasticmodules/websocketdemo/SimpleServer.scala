@@ -21,12 +21,13 @@ import akka.io.IO
 import spray.can.Http
 import spray.can.server.UHttp
 import spray.can.websocket
-import spray.can.websocket.frame.{BinaryFrame, TextFrame}
+import spray.can.websocket.frame.{Frame, BinaryFrame, TextFrame}
 import spray.can.websocket.FrameCommandFailed
 import spray.json._
 import spray.routing.HttpServiceActor
 import scala.io.Source
 import scala.util.Random
+import akka.io.Tcp.{ConnectionClosed, PeerClosed}
 
 case class Sort(property: String, direction: String)
 case class Data(page: Int, limit: Int, start: Int, sort: Option[Sort])
@@ -37,6 +38,8 @@ case class WsCreate(data: List[User]) extends Request
 case class WsRead(data: Data) extends Request
 case class WsUpdate(data: List[User]) extends Request
 case class WsDelete(data: List[User]) extends Request
+
+case class ForwardFrame(frame: Frame)
 
 object UserProtocol extends DefaultJsonProtocol {
   implicit val userFormat = jsonFormat3(User)
@@ -89,18 +92,21 @@ object SimpleServer extends App with MySslConfiguration {
       // when a new connection comes in we register a WebSocketConnection actor as the per connection handler
       case Http.Connected(remoteAddress, localAddress) =>
         val serverConnection = sender()
-        val conn = context.actorOf(WebSocketWorker.props(serverConnection))
+        val conn = context.actorOf(WebSocketWorker.props(serverConnection, self))
+        log.debug("Connection added: {}", conn)
         serverConnection ! Http.Register(conn)
+      case x: ForwardFrame =>
+        context.children.map(_ ! x)
       case _ =>
       // consume and ignore
     }
   }
 
   object WebSocketWorker {
-    def props(serverConnection: ActorRef) = Props(classOf[WebSocketWorker], serverConnection)
+    def props(serverConnection: ActorRef, server: ActorRef) = Props(classOf[WebSocketWorker], serverConnection, server)
   }
 
-  class WebSocketWorker(val serverConnection: ActorRef) extends HttpServiceActor with websocket.WebSocketServerConnection {
+  class WebSocketWorker(val serverConnection: ActorRef, val server: ActorRef) extends HttpServiceActor with websocket.WebSocketServerConnection {
     import UserProtocol.userFormat
     import DefaultJsonProtocol._
 
@@ -111,16 +117,16 @@ object SimpleServer extends App with MySslConfiguration {
         import RequestJsonProtocol._
         val obj = x.payload.utf8String.parseJson.convertTo[Request]
         self ! obj
-
+      case x@(_: ForwardFrame) =>
+        send(x.frame)
       case x: WsCreate =>
         log.debug("Got WsCreate: {}", x)
         x.data.map {
           u : User =>
-            val hash: String = Random.alphanumeric.toString().substring(0, 4)
-            val newUser = User(u.name, u.age, Some(hash))
-            users += (hash -> newUser)
-            // this needs to be a send to all nodes, not just this node
-            send(responseFrame("create", newUser))
+            val hash: String = Random.nextString(4)
+            val user = User(u.name, u.age, Some(hash))
+            users += (hash -> user)
+            server ! ForwardFrame(responseFrame("create", user))
         }
       case x: WsRead =>
         log.debug("Got WsRead: {}", x)
@@ -130,23 +136,23 @@ object SimpleServer extends App with MySslConfiguration {
         x.data.map {
           u : User =>
             users += (u.id.get -> u)
-            // this needs to be a send to all nodes, not just this node
-            send(responseFrame("update", u))
+            server ! ForwardFrame(responseFrame("update", u))
         }
       case x: WsDelete =>
         log.debug("Got WsDelete: {}", x)
         x.data.map { u =>
           users -= u.id.get
-          // this needs to be a send to all nodes, not just this node
-          send(responseFrame("destroy", u))
+          server ! ForwardFrame(responseFrame("destroy", u))
         }
 
       case websocket.UpgradedToWebSocket =>
         self ! WsRead(Data(1, 25, 0, None))
       case x: FrameCommandFailed =>
         log.error("frame command failed {}", x)
-      case _ =>
-        // consume and ignore
+      case x: ConnectionClosed =>
+        context.stop(self)
+      case x@(_: Any) =>
+        log.warning("ignored message : {}", x)
     }
 
     def businessLogicNoUpgrade: Receive = {
@@ -157,9 +163,9 @@ object SimpleServer extends App with MySslConfiguration {
     }
   }
 
-  def responseFrame(eventName: String, newUser: User): TextFrame = {
+  def responseFrame(eventName: String, user: User): TextFrame = {
     import UserProtocol.userFormat
-    TextFrame(JsObject("event" -> JsString(eventName), "data" -> newUser.toJson).compactPrint)
+    TextFrame(JsObject("event" -> JsString(eventName), "data" -> user.toJson).compactPrint)
   }
 
   class DeadLetterListener extends Actor {
