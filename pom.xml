@@ -153,6 +153,21 @@
                     </execution>
                 </executions>
             </plugin>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>1.2.1</version>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>java</goal>
+                        </goals>
+                    </execution>
+                </executions>
+                <configuration>
+                    <mainClass>org.elasticmodules.websocketdemo.SimpleServer</mainClass>
+                </configuration>
+            </plugin>
         </plugins>
     </build>
     <repositories>
@@ -161,7 +176,7 @@
             <url>http://repo.spray.io</url>
         </repository>
         <repository>
-            <id>sonatype-snapshots/id>
+            <id>sonatype-snapshots</id>
             <url>https://oss.sonatype.org/content/repositories/snapshots</url>
         </repository>
     </repositories>
