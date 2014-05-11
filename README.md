@@ -26,3 +26,4 @@ pull requests as you wish and we will include them as indicated.
 
 * Clone project locally
 * ```mvn package exec:java```
+* Connect to your browser: [http://localhost:8080](http://localhost:8080)
