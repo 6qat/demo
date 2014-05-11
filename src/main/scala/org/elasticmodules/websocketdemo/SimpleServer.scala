@@ -30,7 +30,7 @@ import scala.util.Random
 import akka.io.Tcp.{ConnectionClosed, PeerClosed}
 
 case class Sort(property: String, direction: String)
-case class Data(page: Int, limit: Int, start: Int, sort: Option[Sort])
+case class Data(page: Int, limit: Int, start: Int, sort: Option[Array[Sort]])
 case class User(name: String, age: Int, id: Option[String])
 
 trait Request
@@ -45,10 +45,6 @@ object UserProtocol extends DefaultJsonProtocol {
   implicit val userFormat = jsonFormat3(User)
   implicit val sortFormat : JsonFormat[Sort] = jsonFormat2(Sort)
   implicit val dataFormat : JsonFormat[Data] = jsonFormat4(Data)
-  implicit val createFormat = jsonFormat1(WsCreate)
-  implicit val readFormat = jsonFormat1(WsRead)
-  implicit val updateFormat = jsonFormat1(WsUpdate)
-  implicit val deleteFormat = jsonFormat1(WsDelete)
 }
 
 object RequestJsonProtocol extends DefaultJsonProtocol {
@@ -120,30 +116,31 @@ object SimpleServer extends App with MySslConfiguration {
       case x@(_: ForwardFrame) =>
         send(x.frame)
       case x: WsCreate =>
+        import RequestJsonProtocol._
         log.debug("Got WsCreate: {}", x)
-        x.data.map {
-          u : User =>
-            val hash: String = Random.nextString(4)
-            val user = User(u.name, u.age, Some(hash))
-            users += (hash -> user)
-            server ! ForwardFrame(responseFrame("create", user))
+        val newUsers = x.data.map { u : User =>
+          val user = User(u.name, u.age, Some(u.id.getOrElse(Random.alphanumeric.take(5).mkString)))
+          users += (user.id.get -> user)
+          user
         }
+        server ! ForwardFrame(TextFrame(WsCreate(newUsers).asInstanceOf[Request].toJson.compactPrint))
       case x: WsRead =>
         log.debug("Got WsRead: {}", x)
         send(TextFrame(JsObject("event" -> JsString("read"), "data" -> users.values.toJson).compactPrint))
       case x: WsUpdate =>
+        import RequestJsonProtocol._
         log.debug("Got WsUpdate: {}", x)
-        x.data.map {
-          u : User =>
-            users += (u.id.get -> u)
-            server ! ForwardFrame(responseFrame("update", u))
+        x.data foreach { u : User =>
+          users += (u.id.get -> u)
         }
+        server ! ForwardFrame(TextFrame(x.asInstanceOf[Request].toJson.compactPrint))
       case x: WsDelete =>
+        import RequestJsonProtocol._
         log.debug("Got WsDelete: {}", x)
-        x.data.map { u =>
+        x.data foreach { u =>
           users -= u.id.get
-          server ! ForwardFrame(responseFrame("destroy", u))
         }
+        server ! ForwardFrame(TextFrame(x.asInstanceOf[Request].toJson.compactPrint))
 
       case websocket.UpgradedToWebSocket =>
         self ! WsRead(Data(1, 25, 0, None))

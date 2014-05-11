@@ -1,19 +1,3 @@
-/*
- * Copyright 2014 Elastic Modules Team
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
 /**
  * @class Ext.ux.data.proxy.WebSocket
  * @author Vincenzo Ferrari <wilk3ert@gmail.com>
@@ -362,30 +346,34 @@ Ext.define ('Ext.ux.data.proxy.WebSocket', {
 		// Server push case: the store is get up-to-date with the incoming data
 		if (Ext.isEmpty (me.callbacks[event])) {
 			var store = Ext.StoreManager.lookup (me.getStoreId ());
-			
+
 			if (typeof store === 'undefined') {
 				Ext.Error.raise ('Unrecognized store: check if the storeId passed into configuration is right.');
 				return false;
 			}
-			
-            store.loadData (resultSet.records, true);
-            store.fireEvent ('load', store);
+
+            if (event === 'destroy') {
+                store.remove(resultSet.records);
+            } else {
+                store.loadData (resultSet.records, true);
+                store.fireEvent ('load', store);
+            }
 		}
 		// Client request case: a callback function (operation) has to be called
 		else {
 			var fun = me.callbacks[event] ,
 			    opt = fun.operation ,
 			    records = opt.records || data;
-			
+
 			delete me.callbacks[event];
-			
+
 			if (typeof opt.setResultSet === 'function') opt.setResultSet (resultSet);
 			else opt.resultSet = resultSet;
 			opt.scope = fun.scope;
-			
+
 			opt.setCompleted ();
 			opt.setSuccessful ();
-			
+
 			fun.callback.apply (fun.scope, [opt]);
 		}
 	}
