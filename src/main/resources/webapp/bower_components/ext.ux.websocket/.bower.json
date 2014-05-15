@@ -38,6 +38,6 @@
     "commit": "e32844c94e13d27b9d4ef2e0c7b38ddd82857d8b"
   },
   "_source": "git://github.com/wilk/ExtJS-WebSocket.git",
-  "_target": "~0.0.1",
+  "_target": "~0.0.4",
   "_originalSource": "ext.ux.websocket"
 }
